@@ -46,6 +46,16 @@
         <section class="sliders">
             <label title="选中对象后，相机落到这个高度（人眼）">视高 <input type="range" id="eye-height" min="1.2" max="2.0" step="0.05" value="1.7" /><span id="eye-height-v">1.7</span></label>
             <label><input type="checkbox" id="toggle-eye" checked /> 选中后以人眼高度观看</label>
+            <label title="步行模式下在前方显示一个跟随角色">角色
+                <select id="character">
+                    <option value="none">无</option>
+                    <option value="g1" selected>宇树 G1</option>
+                    <option value="h2">宇树 H2</option>
+                    <option value="h1_2">宇树 H1-2</option>
+                </select>
+            </label>
+            <label><input type="checkbox" id="toggle-third" checked /> 第三人称（相机绕角色）</label>
+            <label>跟随距离 <input type="range" id="follow-dist" min="1.2" max="5" step="0.1" value="2.8" /><span id="follow-dist-v">2.8</span></label>
             <label>线宽 <input type="range" id="line-width" min="0.5" max="6" step="0.5" value="1.5" /><span id="line-width-v">1.5</span></label>
             <label>线不透明度 <input type="range" id="line-alpha" min="0.1" max="1" step="0.05" value="0.9" /><span id="line-alpha-v">0.9</span></label>
             <label title="Mask 着色的浓度：1 = 实心纯色，越低越透出原物体">Mask 浓度 <input type="range" id="mask-alpha" min="0.05" max="1" step="0.05" value="1" /><span id="mask-alpha-v">1.0</span></label>

@@ -4,7 +4,7 @@
 // geometry from objects.json every frame; the device's collision mesh tells us which parts
 // are hidden behind walls.
 
-import { Asset, Entity, Layer, Mat4, Vec3 } from 'playcanvas';
+import { AnimClip, AnimEvaluator, Asset, DefaultAnimBinder, Entity, Layer, Mat4, Vec3 } from 'playcanvas';
 import { createViewer } from 'supersplat-viewer';
 
 import { CollisionMesh, VoxelOccluder } from './occlusion.js';
@@ -26,6 +26,11 @@ const LABEL_RISE_PX = 56; // how far above the anchor the label sits
 const EYE_HEIGHT = parseFloat(params.get('eye') ?? '1.7'); // metres above the floor
 const WALK_FOV = parseFloat(params.get('walkfov') ?? '75');
 const COLLISION_GLB = params.get('walkmesh') ?? './data/collision.glb';
+const CHARACTERS = {
+    g1: { url: './data/robot/g1_character.glb', walkSpeed: 0.65, ahead: 1.8, height: 1.32 },
+    h2: { url: './data/robot/h2_character.glb', walkSpeed: 0.85, ahead: 2.0, height: 1.8 },
+    h1_2: { url: './data/robot/h1_2_character.glb', walkSpeed: 0.84, ahead: 2.0, height: 1.8 }
+};
 
 async function pickDefaultContent() {
     for (const c of ['./data/scene.sog', './data/scene_fast.sog', './data/scene.compressed.ply']) {
@@ -65,6 +70,10 @@ const dom = {
     eyeHeight: $('eye-height'),
     eyeHeightV: $('eye-height-v'),
     toggleEye: $('toggle-eye'),
+    character: $('character'),
+    toggleThird: $('toggle-third'),
+    followDist: $('follow-dist'),
+    followDistV: $('follow-dist-v'),
     panel: $('panel')
 };
 
@@ -275,6 +284,21 @@ function refreshMasks() {
     app.renderNextFrame = true;
 }
 
+// preload every mask (hidden) once the scene is up, so switching to Mask mode is instant
+events.on('loaded:changed', (loaded) => {
+    if (!loaded) return;
+    let i = 0;
+    const next = () => {
+        while (i < objects.length && (objects[i].maskEntity || objects[i].maskLoading || !maskManifest[objects[i].name])) i++;
+        if (i >= objects.length) return;
+        const o = objects[i++];
+        ensureMask(o);
+        // stagger a little so the main scene keeps its bandwidth priority
+        setTimeout(next, 150);
+    };
+    setTimeout(next, 500);
+});
+
 dom.status.textContent = `${objects.length} 个对象 · ${CONTENT_URL.split('/').pop()}` + (collision ? (collision instanceof VoxelOccluder ? ` · 遮挡体素 ${collision.count}` : ` · 遮挡网格 ${collision.triCount} 面`) : '');
 
 // ------------------------------------------------------------------ interaction
@@ -409,6 +433,213 @@ function requestRedraw() {
     app.renderNextFrame = true;
     updateOverlay();
 }
+
+// ------------------------------------------------------------------ follow character (walk mode)
+
+const character = {
+    key: null,
+    entity: null,
+    loading: false,
+    heading: 0,
+    pos: new Vec3(),
+    lastCam: new Vec3(),
+    lastT: 0,
+    speed: 0,
+    state: ''
+};
+
+function loadCharacter(key) {
+    const spec = CHARACTERS[key];
+    if (!spec || character.loading) return;
+    character.loading = true;
+    const asset = new Asset(`character:${key}`, 'container', { url: spec.url });
+    asset.on('load', () => {
+        const res = asset.resource;
+        // the glb's single root node (with the Z-up -> Y-up rotation) becomes the instantiated
+        // entity itself, so position/heading go on a separate holder to keep that rotation
+        const model = res.instantiateRenderEntity({ castShadows: false, receiveShadows: false });
+        const e = new Entity(`character:${key}`, app);
+        e.addChild(model);
+        e.enabled = false;
+        app.root.addChild(e);
+        // the viewer app has no anim component system, so drive the node animation directly
+        const tracks = {};
+        for (const a of res.animations) tracks[a.resource.name] = a.resource;
+        const evaluator = new AnimEvaluator(new DefaultAnimBinder(model));
+        const clips = {};
+        for (const name of ['walk', 'idle']) {
+            if (!tracks[name]) continue;
+            const clip = new AnimClip(tracks[name], 0, 1, true, true);
+            clip.blendWeight = 0;
+            evaluator.addClip(clip);
+            clips[name] = clip;
+        }
+        character.entity = e;
+        character.evaluator = evaluator;
+        character.clips = clips;
+        character.key = key;
+        character.spec = spec;
+        character.hasIdle = !!clips.idle;
+        character.loading = false;
+        character.state = '';
+        updateCharacter(true);
+    });
+    asset.on('error', (err) => {
+        console.warn('character load failed', err);
+        character.loading = false;
+    });
+    app.assets.add(asset);
+    app.assets.load(asset);
+}
+
+function setCharacterState(name) {
+    if (!character.entity || character.state === name) return;
+    character.state = name;
+}
+
+// cross-fade clip weights toward the current state and step the animation
+function stepCharacterAnim(dt) {
+    const { clips, evaluator } = character;
+    if (!evaluator) return;
+    for (const [name, clip] of Object.entries(clips)) {
+        const target = name === character.state ? 1 : 0;
+        clip.blendWeight += (target - clip.blendWeight) * Math.min(1, dt * 6);
+    }
+    evaluator.update(dt);
+}
+
+const tmpFwd = new Vec3();
+
+function updateCharacter(force = false) {
+    const want = dom.character.value;
+    if (want === 'none') {
+        if (character.entity) character.entity.enabled = false;
+        return;
+    }
+    if (character.key !== want && !character.loading) {
+        if (character.entity) {
+            character.entity.destroy();
+            character.entity = null;
+            character.key = null;
+        }
+        loadCharacter(want);
+        return;
+    }
+    if (!character.entity) return;
+
+    const walking = state.cameraMode === 'walk';
+    character.entity.enabled = walking;
+    if (!walking) {
+        character.state = '';
+        return;
+    }
+
+    const now = performance.now() / 1000;
+    const dt = Math.min(0.1, Math.max(1e-3, now - character.lastT));
+    character.lastT = now;
+    const camPos = cameraEntity.getPosition();
+
+    // camera ground speed (smoothed)
+    const v = force ? 0 : Math.hypot(camPos.x - character.lastCam.x, camPos.z - character.lastCam.z) / dt;
+    character.speed += (v - character.speed) * Math.min(1, dt * 8);
+    const moveDirX = camPos.x - character.lastCam.x;
+    const moveDirZ = camPos.z - character.lastCam.z;
+    character.lastCam.copy(camPos);
+
+    tmpFwd.copy(cameraEntity.forward);
+    tmpFwd.y = 0;
+    if (tmpFwd.length() < 1e-3) tmpFwd.set(0, 0, -1);
+    tmpFwd.normalize();
+    const spec = character.spec;
+    const thirdPerson = dom.toggleThird.checked;
+    // the walk controller's capsule is the character: feet = capsule eye point - eye height
+    const floorY = camPos.y - EYE_HEIGHT;
+    let targetX;
+    let targetZ;
+    if (thirdPerson) {
+        targetX = camPos.x;
+        targetZ = camPos.z;
+    } else {
+        targetX = camPos.x + tmpFwd.x * spec.ahead;
+        targetZ = camPos.z + tmpFwd.z * spec.ahead;
+    }
+    if (force || thirdPerson) {
+        character.pos.set(targetX, floorY, targetZ);
+    } else {
+        const k = Math.min(1, dt * 6);
+        character.pos.x += (targetX - character.pos.x) * k;
+        character.pos.z += (targetZ - character.pos.z) * k;
+        character.pos.y = floorY;
+    }
+
+    // face the direction of travel; when standing, keep the last heading (third person) or
+    // follow the view (first person)
+    let targetHeading = character.heading;
+    if (character.speed > 0.15 && Math.hypot(moveDirX, moveDirZ) > 1e-4) {
+        targetHeading = Math.atan2(moveDirX, moveDirZ);
+    } else if (!thirdPerson) {
+        targetHeading = Math.atan2(tmpFwd.x, tmpFwd.z);
+    }
+    let d = targetHeading - character.heading;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    character.heading += d * Math.min(1, dt * 8);
+
+    character.entity.setPosition(character.pos);
+    // URDF forward (+X) survives the Y-up wrapper as +X; a yaw of (heading - 90°) turns +X
+    // onto the heading direction (sin h, 0, cos h)
+    character.entity.setEulerAngles(0, (character.heading * 180) / Math.PI - 90, 0);
+
+    if (character.speed > 0.15 || !character.hasIdle) {
+        setCharacterState('walk');
+        if (character.clips.walk) character.clips.walk.speed = Math.min(2.2, Math.max(0.5, character.speed / spec.walkSpeed));
+    } else {
+        setCharacterState('idle');
+    }
+    stepCharacterAnim(dt);
+    app.renderNextFrame = true;
+}
+
+dom.character.addEventListener('change', () => updateCharacter(true));
+dom.toggleThird.addEventListener('change', () => updateCharacter(true));
+dom.followDist.addEventListener('input', () => {
+    dom.followDistV.textContent = dom.followDist.value;
+});
+events.on('cameraMode:changed', () => updateCharacter(true));
+app.on('update', () => updateCharacter(false));
+
+// Third-person camera: after the walk controller has placed its (first-person) camera at the
+// capsule, move the render camera back along the view direction so it orbits the character.
+// Mouse look still rotates the view; the character only turns when it walks.
+const tpPivot = new Vec3();
+const tpCam = new Vec3();
+const tpSrcA = new Vec3();
+const tpSrcB = new Vec3();
+
+function thirdPersonCamera() {
+    if (state.cameraMode !== 'walk' || !character.entity || !character.entity.enabled || !dom.toggleThird.checked) return;
+    const capsule = cameraEntity.getPosition();
+    const fwd = cameraEntity.forward;
+    // pivot around the character's chest
+    tpPivot.set(capsule.x, capsule.y - EYE_HEIGHT + character.spec.height * 0.8, capsule.z);
+    let dist = parseFloat(dom.followDist.value);
+    // pull the camera in when a wall is between it and the character
+    if (collision instanceof VoxelOccluder) {
+        invWorld.copy(splatEntity.getWorldTransform()).invert();
+        invWorld.transformPoint(tpPivot, tpSrcA);
+        for (let tries = 0; tries < 8 && dist > 0.6; tries++) {
+            tpCam.copy(fwd).mulScalar(-dist).add(tpPivot);
+            invWorld.transformPoint(tpCam, tpSrcB);
+            if (!collision.occluded(tpSrcA.x, tpSrcA.y, tpSrcA.z, tpSrcB.x, tpSrcB.y, tpSrcB.z, null, 0.3)) break;
+            dist -= 0.3;
+        }
+    }
+    tpCam.copy(fwd).mulScalar(-dist).add(tpPivot);
+    cameraEntity.setPosition(tpCam);
+}
+
+// registered after the viewer's own 'update' handler, so it runs once the controller has
+// applied the first-person camera for this frame (the engine has no post-update event)
+app.on('update', thirdPersonCamera);
 
 // ------------------------------------------------------------------ per-frame overlay
 
@@ -562,4 +793,4 @@ function formatCount(n) {
 }
 
 // handy for console poking
-window.exhibit = { viewer, objects, collision, selectObject, flyTo, refreshMasks, setDisplayMode, state };
+window.exhibit = { viewer, objects, collision, character, selectObject, flyTo, refreshMasks, setDisplayMode, state };
