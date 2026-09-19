@@ -1,0 +1,1 @@
+../../supersplat-viewer/node_modules/playcanvas/build/playcanvas.mjs

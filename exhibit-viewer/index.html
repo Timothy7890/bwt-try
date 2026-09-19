@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>展厅 3DGS 语义导航 - 方案一 Box</title>
+    <link rel="stylesheet" href="./lib/viewer.css" />
+    <link rel="stylesheet" href="./app.css" />
+    <script type="importmap">
+    {
+        "imports": {
+            "playcanvas": "./lib/playcanvas.mjs",
+            "supersplat-viewer": "./lib/viewer.js",
+            "playcanvas/scripts/": "./lib/pc-scripts/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="viewer"></div>
+
+    <div id="overlay">
+        <svg id="boxes"></svg>
+        <svg id="leaders"></svg>
+        <div id="labels"></div>
+    </div>
+
+    <aside id="panel">
+        <header>
+            <h1>展厅对象</h1>
+            <div id="status">加载中…</div>
+        </header>
+        <section class="toggles">
+            <label class="mode">显示方式
+                <select id="display-mode" title="快捷键 0/1/2/3">
+                    <option value="none">0 · 原始场景</option>
+                    <option value="box" selected>1 · Box 线框</option>
+                    <option value="mask">2 · Mask 着色</option>
+                    <option value="both">3 · Box + Mask</option>
+                </select>
+            </label>
+            <label><input type="checkbox" id="toggle-boxes" checked /> 显示 Box</label>
+            <label><input type="checkbox" id="toggle-labels" checked /> 显示标签</label>
+            <label><input type="checkbox" id="toggle-leaders" checked /> 显示引导线</label>
+        </section>
+        <section class="sliders">
+            <label title="选中对象后，相机落到这个高度（人眼）">视高 <input type="range" id="eye-height" min="1.2" max="2.0" step="0.05" value="1.7" /><span id="eye-height-v">1.7</span></label>
+            <label><input type="checkbox" id="toggle-eye" checked /> 选中后以人眼高度观看</label>
+            <label>线宽 <input type="range" id="line-width" min="0.5" max="6" step="0.5" value="1.5" /><span id="line-width-v">1.5</span></label>
+            <label>线不透明度 <input type="range" id="line-alpha" min="0.1" max="1" step="0.05" value="0.9" /><span id="line-alpha-v">0.9</span></label>
+            <label title="Mask 着色的浓度：1 = 实心纯色，越低越透出原物体">Mask 浓度 <input type="range" id="mask-alpha" min="0.05" max="1" step="0.05" value="1" /><span id="mask-alpha-v">1.0</span></label>
+            <label>遮挡时
+                <select id="occlusion-mode">
+                    <option value="hide" selected>隐藏</option>
+                    <option value="dim">变淡</option>
+                    <option value="ignore">忽略</option>
+                </select>
+            </label>
+        </section>
+        <ul id="object-list"></ul>
+        <footer>
+            <button id="btn-frame">整体视角</button>
+            <button id="btn-walk" title="WASD 行走，鼠标转头，Esc 退出">步行模式（人眼高度）</button>
+            <div class="hint">Tab 显示/隐藏面板 · ` 或 0-3 切换显示方式</div>
+        </footer>
+    </aside>
+
+    <script type="module" src="./app.js"></script>
+</body>
+</html>
