@@ -383,6 +383,11 @@ def main():
     ap.add_argument("--clip", action="append", default=[], help="name=csv[:loop|idle|full]")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--fps", type=float, default=FPS)
+    ap.add_argument("--zero", default="",
+                    help="comma list of joint-name substrings to force to 0 (e.g. hip_yaw,ankle_roll)")
+    ap.add_argument("--damp", default="",
+                    help="comma list of substring=factor; scales that joint's motion about its mean "
+                         "(e.g. shoulder_pitch=0.5,elbow=0.6 to calm arm swing)")
     ap.add_argument("--csv-robot", choices=list(ROBOTS), default=None,
                     help="the CSV's joint order follows this robot's URDF; angles are mapped by joint "
                          "name onto --robot and the root height is scaled by leg length (e.g. G1 data on H2)")
@@ -464,6 +469,23 @@ def main():
                 root_xyz = root_xyz * np.array([root_scale, root_scale, root_scale])
             if qj.shape[1] != len(revolute):
                 raise SystemExit(f"{csv_path.name}: {qj.shape[1]} joint columns but URDF has {len(revolute)} joints")
+
+        # optional per-joint clean-up of transferred motion
+        if mode != "stance" and (args.zero or args.damp):
+            zero_keys = [z for z in args.zero.split(",") if z]
+            damp = {}
+            for item in args.damp.split(","):
+                if "=" in item:
+                    k, v = item.split("=")
+                    damp[k] = float(v)
+            for k, j in enumerate(revolute):
+                if any(z in j.name for z in zero_keys):
+                    qj[:, k] = 0.0
+                    continue
+                for key, f in damp.items():
+                    if key in j.name:
+                        m = qj[:, k].mean()
+                        qj[:, k] = m + (qj[:, k] - m) * f
 
         if mode == "stance":
             pass

@@ -29,6 +29,19 @@ export class VoxelOccluder {
         return new VoxelOccluder(origin, voxel, dims, new Uint8Array(buf, 28));
     }
 
+    /** Top of the first solid voxel at or below (sx, sy, startZ) in the source frame, or null. */
+    groundZ(sx, sy, startZ, maxDrop = 3.0) {
+        const vs = this.voxel;
+        const ix = Math.floor((sx - this.origin[0]) / vs);
+        const iy = Math.floor((sy - this.origin[1]) / vs);
+        let iz = Math.floor((startZ - this.origin[2]) / vs);
+        const minIz = Math.max(0, Math.floor((startZ - maxDrop - this.origin[2]) / vs));
+        for (; iz >= minIz; iz--) {
+            if (this.solid(ix, iy, iz)) return this.origin[2] + (iz + 1) * vs;
+        }
+        return null;
+    }
+
     solid(ix, iy, iz) {
         if (ix < 0 || iy < 0 || iz < 0 || ix >= this.nx || iy >= this.ny || iz >= this.nz) return false;
         const i = ix + this.nx * (iy + this.ny * iz);

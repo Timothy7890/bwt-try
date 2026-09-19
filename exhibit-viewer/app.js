@@ -74,7 +74,10 @@ const dom = {
     toggleThird: $('toggle-third'),
     followDist: $('follow-dist'),
     followDistV: $('follow-dist-v'),
-    panel: $('panel')
+    panel: $('panel'),
+    loading: $('loading'),
+    loadingFill: $('loading-fill'),
+    loadingText: $('loading-text')
 };
 
 // ------------------------------------------------------------------ viewer
@@ -91,8 +94,41 @@ const viewer = await createViewer({
 const { app, events, state } = viewer;
 const cameraEntity = app.root.findByName('camera');
 
+// ---- loading screen: scene bytes + every mask + the default character, then reveal
+const PRELOAD = params.get('nopreload') === null;
+const loadTracker = { scene: 0, sceneDone: false, items: new Map() };
+function trackItem(name) {
+    loadTracker.items.set(name, false);
+    updateLoading();
+}
+function finishItem(name) {
+    loadTracker.items.set(name, true);
+    updateLoading();
+}
+function updateLoading() {
+    const items = [...loadTracker.items.values()];
+    const doneItems = items.filter(Boolean).length;
+    // scene = 70 % of the bar, the rest shared by masks / character
+    const frac = 0.7 * (loadTracker.sceneDone ? 1 : loadTracker.scene / 100) + 0.3 * (items.length ? doneItems / items.length : 1);
+    dom.loadingFill.style.width = `${Math.round(frac * 100)}%`;
+    dom.loadingText.textContent = loadTracker.sceneDone
+        ? `场景就绪 · 语义数据 ${doneItems}/${items.length}`
+        : `场景 ${Math.round(loadTracker.scene)}%`;
+    if (loadTracker.sceneDone && doneItems === items.length && !dom.loading.classList.contains('done')) {
+        dom.loading.classList.add('done');
+        setTimeout(() => dom.loading.remove(), 500);
+    }
+}
 events.on('progress:changed', (p) => {
     dom.status.textContent = `加载场景 ${p}%`;
+    loadTracker.scene = p;
+    updateLoading();
+});
+events.on('loaded:changed', (loaded) => {
+    if (loaded) {
+        loadTracker.sceneDone = true;
+        updateLoading();
+    }
 });
 
 // Re-orient the splat entity the moment the asset resolves (before the viewer measures the
@@ -227,9 +263,11 @@ function ensureMask(o) {
     const info = maskManifest[o.name];
     if (!info) return;
     o.maskLoading = true;
+    trackItem(`mask:${o.name}`);
     const url = maskDir + info.file.split('/').pop();
     const asset = new Asset(`mask:${o.name}`, 'gsplat', { url, filename: `${o.name}.ply` });
     asset.on('load', () => {
+        finishItem(`mask:${o.name}`);
         // keep the original opacities so the mask strength slider can rescale them live
         const res = asset.resource;
         if (res && res.gsplatData && typeof res.updateColorData === 'function') {
@@ -247,6 +285,7 @@ function ensureMask(o) {
     asset.on('error', (err) => {
         console.warn('mask load failed', o.name, err);
         o.maskLoading = false;
+        finishItem(`mask:${o.name}`);
     });
     app.assets.add(asset);
     app.assets.load(asset);
@@ -284,20 +323,11 @@ function refreshMasks() {
     app.renderNextFrame = true;
 }
 
-// preload every mask (hidden) once the scene is up, so switching to Mask mode is instant
-events.on('loaded:changed', (loaded) => {
-    if (!loaded) return;
-    let i = 0;
-    const next = () => {
-        while (i < objects.length && (objects[i].maskEntity || objects[i].maskLoading || !maskManifest[objects[i].name])) i++;
-        if (i >= objects.length) return;
-        const o = objects[i++];
-        ensureMask(o);
-        // stagger a little so the main scene keeps its bandwidth priority
-        setTimeout(next, 150);
-    };
-    setTimeout(next, 500);
-});
+// preload every mask (hidden) right away, in parallel with the scene; the loading screen
+// stays up until everything is in, so browsing never stutters afterwards
+if (PRELOAD) {
+    for (const o of objects) ensureMask(o);
+}
 
 dom.status.textContent = `${objects.length} 个对象 · ${CONTENT_URL.split('/').pop()}` + (collision ? (collision instanceof VoxelOccluder ? ` · 遮挡体素 ${collision.count}` : ` · 遮挡网格 ${collision.triCount} 面`) : '');
 
@@ -452,8 +482,10 @@ function loadCharacter(key) {
     const spec = CHARACTERS[key];
     if (!spec || character.loading) return;
     character.loading = true;
+    trackItem(`character:${key}`);
     const asset = new Asset(`character:${key}`, 'container', { url: spec.url });
     asset.on('load', () => {
+        finishItem(`character:${key}`);
         const res = asset.resource;
         // the glb's single root node (with the Z-up -> Y-up rotation) becomes the instantiated
         // entity itself, so position/heading go on a separate holder to keep that rotation
@@ -487,6 +519,7 @@ function loadCharacter(key) {
     asset.on('error', (err) => {
         console.warn('character load failed', err);
         character.loading = false;
+        finishItem(`character:${key}`);
     });
     app.assets.add(asset);
     app.assets.load(asset);
@@ -509,6 +542,7 @@ function stepCharacterAnim(dt) {
 }
 
 const tmpFwd = new Vec3();
+const tmpSrc = new Vec3();
 
 function updateCharacter(force = false) {
     const want = dom.character.value;
@@ -552,8 +586,20 @@ function updateCharacter(force = false) {
     tmpFwd.normalize();
     const spec = character.spec;
     const thirdPerson = dom.toggleThird.checked;
-    // the walk controller's capsule is the character: feet = capsule eye point - eye height
-    const floorY = camPos.y - EYE_HEIGHT;
+    // the walk controller's capsule is the character. Its feet sit on the Gaussian floor found
+    // by probing the voxel grid straight down (the device collision mesh has dips in places,
+    // which would otherwise sink the character); fall back to eye point - eye height.
+    let floorY = camPos.y - EYE_HEIGHT;
+    if (collision instanceof VoxelOccluder) {
+        invWorld.copy(splatEntity.getWorldTransform()).invert();
+        invWorld.transformPoint(camPos, tmpSrc);
+        // probe from knee height so furniture at floor level is skipped but a raised platform counts
+        const gz = collision.groundZ(tmpSrc.x, tmpSrc.y, tmpSrc.z - EYE_HEIGHT + 0.5);
+        if (gz !== null) {
+            const gY = splatEntity.getWorldTransform().transformPoint(tmpSrc.set(tmpSrc.x, tmpSrc.y, gz), tmpSrc).y;
+            if (Math.abs(gY - floorY) < 1.0) floorY = gY;
+        }
+    }
     let targetX;
     let targetZ;
     if (thirdPerson) {
@@ -601,6 +647,7 @@ function updateCharacter(force = false) {
 
 dom.character.addEventListener('change', () => updateCharacter(true));
 dom.toggleThird.addEventListener('change', () => updateCharacter(true));
+if (PRELOAD && dom.character.value !== 'none') loadCharacter(dom.character.value);
 dom.followDist.addEventListener('input', () => {
     dom.followDistV.textContent = dom.followDist.value;
 });

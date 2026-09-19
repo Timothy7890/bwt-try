@@ -271,3 +271,51 @@ html, body {
     color: #7a7a86;
     text-align: center;
 }
+
+/* ---- full loading screen: scene + masks + character, so browsing never stutters ---- */
+#loading {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0d0d10;
+    transition: opacity 0.4s ease;
+}
+
+#loading.done {
+    opacity: 0;
+    pointer-events: none;
+}
+
+#loading .box {
+    width: 360px;
+    text-align: center;
+}
+
+#loading .title {
+    font-size: 16px;
+    margin-bottom: 14px;
+    color: #ddd;
+}
+
+#loading .bar {
+    height: 6px;
+    background: #23232b;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+#loading-fill {
+    height: 100%;
+    width: 0;
+    background: #ff6a1a;
+    transition: width 0.2s ease;
+}
+
+#loading-text {
+    margin-top: 10px;
+    font-size: 12px;
+    color: #8a8a95;
+}
