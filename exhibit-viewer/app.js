@@ -4,7 +4,7 @@
 // geometry from objects.json every frame; the device's collision mesh tells us which parts
 // are hidden behind walls.
 
-import { AnimClip, AnimEvaluator, Asset, DefaultAnimBinder, Entity, Layer, Mat4, Vec3 } from 'playcanvas';
+import { AnimClip, AnimEvaluator, Asset, BoundingBox, DefaultAnimBinder, Entity, Layer, Mat4, Vec3 } from 'playcanvas';
 import { createViewer } from 'supersplat-viewer';
 
 import { CollisionMesh, VoxelOccluder } from './occlusion.js';
@@ -442,6 +442,8 @@ window.addEventListener('keydown', (ev) => {
     if (ev.key === 'Tab') {
         ev.preventDefault();
         dom.panel.classList.toggle('hidden');
+    } else if (ev.key === 'i' || ev.key === 'I') {
+        document.getElementById('caminfo').classList.toggle('hidden');
     } else if ((ev.key in KEY_MODES || ev.code === 'Backquote') && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
         // the viewer maps 1/2/3 to orbit/fly/walk; we take these keys over (camera modes
         // stay reachable from the viewer's bottom-right buttons)
@@ -682,7 +684,29 @@ function thirdPersonCamera() {
     }
     tpCam.copy(fwd).mulScalar(-dist).add(tpPivot);
     cameraEntity.setPosition(tpCam);
+
 }
+
+// The viewer fits near/far to a scene bound it measured at load time, which for this scene
+// comes out far too small (we measured far = 4.6 m while the hall is 40 m across): anything
+// beyond a few metres gets far-clipped, e.g. the character from the feet up. Re-fit every
+// frame from the splat's actual bounds and the *rendered* camera position.
+const clipBox = new BoundingBox();
+const clipVec = new Vec3();
+function fixClipPlanes() {
+    const comp = splatEntity && splatEntity.gsplat;
+    const aabb = comp && comp.customAabb;
+    if (!aabb) return;
+    clipBox.setFromTransformedAabb(aabb, splatEntity.getWorldTransform());
+    const cam = cameraEntity.camera;
+    const radius = clipBox.halfExtents.length();
+    clipVec.sub2(clipBox.center, cameraEntity.getPosition());
+    const dist = clipVec.dot(cameraEntity.forward);
+    const far = Math.max(dist + radius, 5);
+    cam.farClip = far;
+    cam.nearClip = Math.min(cam.nearClip, 0.05, far / (1024 * 16) + 0.01);
+}
+app.on('update', fixClipPlanes);
 
 // registered after the viewer's own 'update' handler, so it runs once the controller has
 // applied the first-person camera for this frame (the engine has no post-update event)
@@ -827,6 +851,23 @@ function updateOverlay() {
 }
 
 app.on('framerender', updateOverlay);
+
+// camera info overlay (I key): copy these numbers when reporting a view problem
+const camInfoEl = document.getElementById('caminfo');
+app.on('framerender', () => {
+    if (camInfoEl.classList.contains('hidden')) return;
+    const p = cameraEntity.getPosition();
+    const f = cameraEntity.forward;
+    const fmt = (v) => `${v.x.toFixed(2)}, ${v.y.toFixed(2)}, ${v.z.toFixed(2)}`;
+    const floorY = FLOOR_Z !== null ? splatEntity.getWorldTransform().transformPoint(new Vec3(0, 0, FLOOR_Z)).y : NaN;
+    const pitch = (Math.asin(Math.max(-1, Math.min(1, f.y))) * 180) / Math.PI;
+    let txt = `camera P  ${fmt(p)}\ncamera dir ${fmt(f)}  pitch ${pitch.toFixed(1)}°\ncamera above floor ${(p.y - floorY).toFixed(2)} m\nmode ${state.cameraMode}`;
+    if (character.entity && character.entity.enabled) {
+        const c = character.entity.getPosition();
+        txt += `\ncharacter ${fmt(c)}  state ${character.state}\ncam-char dist ${Math.hypot(p.x - c.x, p.z - c.z).toFixed(2)} m, height diff ${(p.y - c.y).toFixed(2)} m`;
+    }
+    camInfoEl.textContent = txt;
+});
 requestRedraw();
 
 // ------------------------------------------------------------------ utils
