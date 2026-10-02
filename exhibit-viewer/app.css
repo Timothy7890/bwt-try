@@ -338,3 +338,9 @@ html, body {
 #caminfo.hidden {
     display: none;
 }
+
+/* Gaussian counts are hidden unless "显示高斯数量" is on */
+body:not(.show-counts) #labels .label .meta,
+body:not(.show-counts) #panel li .count {
+    display: none;
+}

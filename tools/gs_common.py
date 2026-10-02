@@ -1,6 +1,7 @@
 """Shared helpers for 3DGS PLY label tooling."""
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -9,7 +10,11 @@ from plyfile import PlyData, PlyElement
 
 SH_C0 = 0.28209479177387814
 
-DATA_DIR = Path("/g12213021yx/Xin_Yang/project_data/3DGS/BWT/0916展厅数据第二次测试")
+# One scene per directory: <scene>/point_cloud.ply, <scene>/manual_labels/, <scene>/labels/ ...
+# Set BWT_SCENE_DIR (tools/pipeline.py does this) to pick the scene; the old server path is
+# only a fallback for existing workflows there.
+_LEGACY_DATA_DIR = Path("/g12213021yx/Xin_Yang/project_data/3DGS/BWT/0916展厅数据第二次测试")
+DATA_DIR = Path(os.environ.get("BWT_SCENE_DIR") or _LEGACY_DATA_DIR).expanduser().resolve()
 SCENE_PLY = DATA_DIR / "point_cloud.ply"
 LABEL_DIR = DATA_DIR / "manual_labels"   # drop CloudCompare / SuperSplat exports here
 OUT_DIR = DATA_DIR / "labels"            # labels.npy / classes.json / metadata.json

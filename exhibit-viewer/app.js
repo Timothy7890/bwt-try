@@ -25,7 +25,8 @@ const SOURCE_ROTATION = [-90, 0, 0];
 const LABEL_RISE_PX = 56; // how far above the anchor the label sits
 const EYE_HEIGHT = parseFloat(params.get('eye') ?? '1.7'); // metres above the floor
 const WALK_FOV = parseFloat(params.get('walkfov') ?? '75');
-const COLLISION_GLB = params.get('walkmesh') ?? './data/collision.glb';
+// voxel collision from the Gaussians (tools/pipeline.py, step "walk"); a .glb mesh also works
+const WALK_COLLISION = params.get('walkmesh') ?? './data/walk.voxel.json';
 const CHARACTERS = {
     g1: { url: './data/robot/g1_character.glb', walkSpeed: 0.65, ahead: 1.8, height: 1.32 },
     h2: { url: './data/robot/h2_character.glb', walkSpeed: 0.85, ahead: 2.0, height: 1.8 },
@@ -58,6 +59,7 @@ const dom = {
     toggleBoxes: $('toggle-boxes'),
     toggleLabels: $('toggle-labels'),
     toggleLeaders: $('toggle-leaders'),
+    toggleCounts: $('toggle-counts'),
     lineWidth: $('line-width'),
     lineWidthV: $('line-width-v'),
     lineAlpha: $('line-alpha'),
@@ -74,6 +76,9 @@ const dom = {
     toggleThird: $('toggle-third'),
     followDist: $('follow-dist'),
     followDistV: $('follow-dist-v'),
+    toggleFov: $('toggle-fov'),
+    fov: $('fov'),
+    fovV: $('fov-v'),
     panel: $('panel'),
     loading: $('loading'),
     loadingFill: $('loading-fill'),
@@ -86,7 +91,7 @@ const viewer = await createViewer({
     container: dom.viewer,
     settings: SETTINGS_URL,
     contentUrl: CONTENT_URL,
-    collisionUrl: COLLISION_GLB, // enables walk mode (WASD on the floor)
+    collisionUrl: WALK_COLLISION, // enables walk mode (WASD on the floor)
     walkEyeHeight: EYE_HEIGHT,
     walkFov: WALK_FOV
 });
@@ -426,6 +431,9 @@ dom.eyeHeight.addEventListener('input', () => {
 for (const el of [dom.toggleBoxes, dom.toggleLabels, dom.toggleLeaders, dom.occlusionMode]) {
     el.addEventListener('change', requestRedraw);
 }
+dom.toggleCounts.addEventListener('change', () => {
+    document.body.classList.toggle('show-counts', dom.toggleCounts.checked);
+});
 function setDisplayMode(mode) {
     dom.displayMode.value = mode;
     dom.toggleBoxes.checked = mode === 'box' || mode === 'both';
@@ -589,8 +597,8 @@ function updateCharacter(force = false) {
     const spec = character.spec;
     const thirdPerson = dom.toggleThird.checked;
     // the walk controller's capsule is the character. Its feet sit on the Gaussian floor found
-    // by probing the voxel grid straight down (the device collision mesh has dips in places,
-    // which would otherwise sink the character); fall back to eye point - eye height.
+    // by probing the occupancy grid straight down (a coarser walk collision, e.g. a mesh with
+    // dips, would otherwise sink the character); fall back to eye point - eye height.
     let floorY = camPos.y - EYE_HEIGHT;
     if (collision instanceof VoxelOccluder) {
         invWorld.copy(splatEntity.getWorldTransform()).invert();
@@ -599,7 +607,9 @@ function updateCharacter(force = false) {
         const gz = collision.groundZ(tmpSrc.x, tmpSrc.y, tmpSrc.z - EYE_HEIGHT + 0.5);
         if (gz !== null) {
             const gY = splatEntity.getWorldTransform().transformPoint(tmpSrc.set(tmpSrc.x, tmpSrc.y, gz), tmpSrc).y;
-            if (Math.abs(gY - floorY) < 1.0) floorY = gY;
+            // capsule above the Gaussian floor = jumping/airborne: follow it. At or below the
+            // floor (a dip in the collision mesh): stand on the Gaussian floor instead.
+            if (floorY <= gY + 0.05 && Math.abs(gY - floorY) < 1.0) floorY = gY;
         }
     }
     let targetX;
@@ -652,6 +662,20 @@ dom.toggleThird.addEventListener('change', () => updateCharacter(true));
 if (PRELOAD && dom.character.value !== 'none') loadCharacter(dom.character.value);
 dom.followDist.addEventListener('input', () => {
     dom.followDistV.textContent = dom.followDist.value;
+});
+dom.fov.addEventListener('input', () => {
+    dom.fovV.textContent = `${dom.fov.value}°`;
+    if (!dom.toggleFov.checked) {
+        dom.toggleFov.checked = true;
+    }
+    app.renderNextFrame = true;
+});
+dom.toggleFov.addEventListener('change', () => {
+    app.renderNextFrame = true;
+});
+// custom field of view: applied after the viewer's per-mode camera each frame
+app.on('update', () => {
+    if (dom.toggleFov.checked) cameraEntity.camera.fov = parseFloat(dom.fov.value);
 });
 events.on('cameraMode:changed', () => updateCharacter(true));
 app.on('update', () => updateCharacter(false));

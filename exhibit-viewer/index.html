@@ -51,6 +51,7 @@
             <label><input type="checkbox" id="toggle-boxes" checked /> 显示 Box</label>
             <label><input type="checkbox" id="toggle-labels" checked /> 显示标签</label>
             <label><input type="checkbox" id="toggle-leaders" checked /> 显示引导线</label>
+            <label><input type="checkbox" id="toggle-counts" /> 显示高斯数量</label>
         </section>
         <section class="sliders">
             <label title="选中对象后，相机落到这个高度（人眼）">视高 <input type="range" id="eye-height" min="1.2" max="2.0" step="0.05" value="1.7" /><span id="eye-height-v">1.7</span></label>
@@ -65,6 +66,8 @@
             </label>
             <label><input type="checkbox" id="toggle-third" checked /> 第三人称（相机绕角色）</label>
             <label>跟随距离 <input type="range" id="follow-dist" min="1.2" max="5" step="0.1" value="2.8" /><span id="follow-dist-v">2.8</span></label>
+            <label title="勾选后所有相机模式统一使用这个视场角；不勾选则轨道 60° / 步行 75°"><input type="checkbox" id="toggle-fov" /> 自定义视场角</label>
+            <label>视场角 <input type="range" id="fov" min="35" max="110" step="1" value="75" /><span id="fov-v">75°</span></label>
             <label>线宽 <input type="range" id="line-width" min="0.5" max="6" step="0.5" value="1.5" /><span id="line-width-v">1.5</span></label>
             <label>线不透明度 <input type="range" id="line-alpha" min="0.1" max="1" step="0.05" value="0.9" /><span id="line-alpha-v">0.9</span></label>
             <label title="Mask 着色的浓度：1 = 实心纯色，越低越透出原物体">Mask 浓度 <input type="range" id="mask-alpha" min="0.05" max="1" step="0.05" value="1" /><span id="mask-alpha-v">1.0</span></label>

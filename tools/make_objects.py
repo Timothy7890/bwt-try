@@ -76,12 +76,19 @@ def main():
                     help="optional json {class_name: display_name}")
     args = ap.parse_args()
 
-    labels = np.load(args.label_dir / "labels.npy")
-    classes = json.load(open(args.label_dir / "classes.json", encoding="utf-8"))
     display = json.load(open(args.display_names, encoding="utf-8")) if args.display_names else {}
 
     _, vertex = load_scene(args.scene)
     xyz = scene_xyz(vertex)
+    if (args.label_dir / "labels.npy").exists():
+        labels = np.load(args.label_dir / "labels.npy")
+        classes = json.load(open(args.label_dir / "classes.json", encoding="utf-8"))
+    else:
+        # scene not labelled yet: still emit floor / bounds so the viewer and walk mesh work
+        print("no labels.npy - writing objects.json without objects")
+        labels = np.full(len(xyz), -1, dtype=np.int32)
+        classes = {}
+    args.label_dir.mkdir(parents=True, exist_ok=True)
     opacity = 1 / (1 + np.exp(-vertex["opacity"].astype(np.float64)))
 
     objects = []

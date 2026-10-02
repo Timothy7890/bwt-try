@@ -24,7 +24,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scene", type=Path, default=SCENE_PLY)
     ap.add_argument("--out", type=Path, default=DATA_DIR / "labels" / "occupancy.bin")
-    ap.add_argument("--voxel", type=float, default=0.10, help="voxel size in metres")
+    ap.add_argument("--voxel", type=float, default=0.10,
+                    help="voxel size in metres; grown automatically if the grid would exceed --max-voxels")
+    ap.add_argument("--max-voxels", type=float, default=8e7,
+                    help="voxel budget (bits); keeps large outdoor scenes to ~10 MB")
     ap.add_argument("--min-opacity", type=float, default=0.3)
     ap.add_argument("--min-count", type=int, default=1, help="Gaussians per voxel to count as solid")
     ap.add_argument("--max-scale", type=float, default=2.0,
@@ -40,13 +43,20 @@ def main():
     pts = xyz[keep]
     print(f"{keep.sum()}/{len(xyz)} Gaussians used")
 
-    lo = xyz.min(0) - args.voxel
-    hi = xyz.max(0) + args.voxel
-    dims = np.ceil((hi - lo) / args.voxel).astype(np.int64)
+    # bounds from the solid Gaussians only, so far-away floaters do not blow up the grid
+    ext = pts.max(0) - pts.min(0)
+    voxel = args.voxel
+    if np.prod(ext / voxel + 2) > args.max_voxels:
+        voxel = float(np.cbrt(np.prod(ext) / args.max_voxels))
+        voxel = float(np.ceil(voxel / 0.05) * 0.05)
+        print(f"scene extent {np.round(ext, 1)} m too large for {args.voxel} m voxels -> using {voxel:.2f} m")
+    lo = pts.min(0) - voxel
+    hi = pts.max(0) + voxel
+    dims = np.ceil((hi - lo) / voxel).astype(np.int64)
     nx, ny, nz = (int(d) for d in dims)
-    print("grid", (nx, ny, nz), "=", nx * ny * nz, "voxels")
+    print("grid", (nx, ny, nz), "=", nx * ny * nz, "voxels", f"@ {voxel:.2f} m")
 
-    ijk = np.floor((pts - lo) / args.voxel).astype(np.int64)
+    ijk = np.minimum(np.floor((pts - lo) / voxel).astype(np.int64), dims - 1)
     flat = ijk[:, 0] + nx * (ijk[:, 1] + ny * ijk[:, 2])
     uniq, counts = np.unique(flat, return_counts=True)
     solid = uniq[counts >= args.min_count]
@@ -66,7 +76,7 @@ def main():
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "wb") as fh:
-        fh.write(struct.pack("<3ff3I", *lo.astype(np.float32), args.voxel, nx, ny, nz))
+        fh.write(struct.pack("<3ff3I", *lo.astype(np.float32), voxel, nx, ny, nz))
         fh.write(bits.tobytes())
     print("wrote", args.out, f"{args.out.stat().st_size / 1e6:.2f} MB")
 
