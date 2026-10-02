@@ -199,6 +199,13 @@ def step_link(scene: Scene):
             continue
         how = _link(src, VIEWER_DATA / name)
         print(f"  [{how}] {name}")
+    # robot GLBs are shared by all scenes: <data root>/glb next to the scene directories
+    robot_src = scene.root.parent / "glb"
+    if robot_src.is_dir():
+        _remove(VIEWER_DATA / "robot")
+        print(f"  [{_link(robot_src, VIEWER_DATA / 'robot')}] robot")
+    elif not (VIEWER_DATA / "robot").exists():
+        print(f"  [跳过] robot（没有 {robot_src}，角色不显示）")
     (VIEWER_DATA / "CURRENT_SCENE.txt").write_text(str(scene.root) + "\n", encoding="utf-8")
     if not (scene.out / "scene.sog").exists():
         print("  注意：没有 scene.sog，前端会找不到场景文件")

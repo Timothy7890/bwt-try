@@ -1,0 +1,9 @@
+# generated per machine by tools/pipeline.py (links into the scene data directory)
+exhibit-viewer/data/
+
+# separate upstream checkout; local changes are kept in patches/
+supersplat-viewer/
+
+__pycache__/
+*.pyc
+.DS_Store
