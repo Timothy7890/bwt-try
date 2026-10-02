@@ -15,6 +15,8 @@ Usage:
 
 Steps (in order): check, labels, occupancy, walk, collision, sog, link.
   walk: voxel collision built from the Gaussians (splat-transform .voxel.json) for walk mode
+  link: register <scene>/labels as exhibit-viewer/data/scenes/<scene name>; every registered
+        scene shows up in the viewer's scene picker (run it once per scene directory)
 """
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 VIEWER_DATA = REPO / "exhibit-viewer" / "data"
+SCENES_DIR = VIEWER_DATA / "scenes"
 STEPS = ["check", "labels", "occupancy", "walk", "collision", "sog", "link"]
 SEG_SUFFIXES = {".ply", ".txt", ".asc", ".csv", ".xyz"}
 PY_DEPS = ["numpy", "scipy", "plyfile"]
@@ -35,8 +38,10 @@ PY_DEPS = ["numpy", "scipy", "plyfile"]
 # viewer file name -> path inside <scene>/labels
 LINKED = ["scene.sog", "objects.json", "occupancy.bin", "collision.bin",
           "walk.voxel.json", "walk.voxel.bin", "masks"]
-# files app.js would otherwise pick up from a previous scene / the old flat-floor walk mesh
+# leftovers of the old single-scene layout directly in exhibit-viewer/data/
 STALE_SCENE_FILES = ["scene_fast.sog", "scene.compressed.ply", "scene.ply", "collision.glb"]
+# what the viewer renders, in order of preference
+SCENE_CONTENT = ["scene.sog", "scene_fast.sog", "scene.compressed.ply", "scene.ply"]
 # app.js turns the Z-up source into Y-up with Euler (-90, 0, 0). splat-transform writes voxels
 # in the viewer's default frame (which assumes a 180° Z roll), so undo that roll first.
 WALK_ROTATION = ["-r", "0,0,180", "-r", "-90,0,0"]
@@ -177,14 +182,15 @@ def _link(target: Path, link: Path):
         return "copy"
 
 
-def step_link(scene: Scene):
-    print(f"\n=== link: exhibit-viewer/data -> {scene.out}")
-    VIEWER_DATA.mkdir(parents=True, exist_ok=True)
+def _clear_flat_layout():
+    """The old layout linked a single scene straight into exhibit-viewer/data/."""
     stash = VIEWER_DATA / "_stash"
-    for name in LINKED + STALE_SCENE_FILES:
+    for name in LINKED + STALE_SCENE_FILES + ["CURRENT_SCENE.txt"]:
         dst = VIEWER_DATA / name
-        if dst.is_symlink() or not dst.exists():
-            _remove(dst)  # also clears dangling links
+        if not dst.is_symlink() and not dst.exists():
+            continue
+        if dst.is_symlink() or name == "CURRENT_SCENE.txt":
+            _remove(dst)
             continue
         # a real file from an older manual setup: keep it, just move it out of the way
         stash.mkdir(exist_ok=True)
@@ -192,13 +198,41 @@ def step_link(scene: Scene):
         _remove(moved)
         shutil.move(str(dst), str(moved))
         print(f"  moved existing {name} -> _stash/{name}")
-    for name in LINKED:
-        src = scene.out / name
-        if not src.exists():
-            print(f"  [跳过] {name}（未生成）")
+
+
+def write_scene_index():
+    """exhibit-viewer/data/scenes/index.json: every registered scene, read by the web scene picker."""
+    import json
+    scenes = []
+    for d in sorted(SCENES_DIR.iterdir(), key=lambda p: p.name):
+        if d.name.startswith((".", "_")) or not d.is_dir():  # is_dir() is False for dangling links
+            if d.is_symlink():
+                d.unlink()
+                print(f"  [移除] 失效的场景 {d.name}")
             continue
-        how = _link(src, VIEWER_DATA / name)
-        print(f"  [{how}] {name}")
+        content = next((c for c in SCENE_CONTENT if (d / c).exists()), None)
+        if not content:
+            continue
+        objects = d / "objects.json"
+        count = len(json.load(open(objects, encoding="utf-8")).get("objects", [])) if objects.exists() else 0
+        files = [n for n in LINKED if (d / n).exists()]
+        scenes.append({"name": d.name, "content": content, "objects": count, "files": files})
+    (SCENES_DIR / "index.json").write_text(json.dumps({"scenes": scenes}, ensure_ascii=False, indent=2) + "\n",
+                                           encoding="utf-8")
+    return scenes
+
+
+def step_link(scene: Scene):
+    dst = SCENES_DIR / scene.root.name
+    print(f"\n=== link: exhibit-viewer/data/scenes/{scene.root.name} -> {scene.out}")
+    if not scene.out.is_dir():
+        print("  [跳过] labels/ 还没生成")
+        return
+    SCENES_DIR.mkdir(parents=True, exist_ok=True)
+    _clear_flat_layout()
+    if dst.is_symlink() or dst.exists():
+        _remove(dst)
+    print(f"  [{_link(scene.out, dst)}] {scene.root.name}")
     # robot GLBs are shared by all scenes: <data root>/glb next to the scene directories
     robot_src = scene.root.parent / "glb"
     if robot_src.is_dir():
@@ -206,9 +240,10 @@ def step_link(scene: Scene):
         print(f"  [{_link(robot_src, VIEWER_DATA / 'robot')}] robot")
     elif not (VIEWER_DATA / "robot").exists():
         print(f"  [跳过] robot（没有 {robot_src}，角色不显示）")
-    (VIEWER_DATA / "CURRENT_SCENE.txt").write_text(str(scene.root) + "\n", encoding="utf-8")
-    if not (scene.out / "scene.sog").exists():
-        print("  注意：没有 scene.sog，前端会找不到场景文件")
+    scenes = write_scene_index()
+    print(f"  场景列表: {', '.join(s['name'] for s in scenes) or '（空）'}")
+    if not any((scene.out / c).exists() for c in SCENE_CONTENT):
+        print("  注意：没有 scene.sog，这个场景不会出现在网页的场景列表里")
 
 
 def main():
@@ -243,7 +278,7 @@ def main():
             step_walk(scene, args.force, args.walk_voxel)
         else:
             globals()[f"step_{s}"](scene)
-    print("\ndone. 启动服务: npx serve exhibit-viewer --symlinks -l 3000，然后刷新浏览器")
+    print("\ndone. 启动服务: npx serve exhibit-viewer --symlinks -l 3000，在网页上选择场景")
 
 
 if __name__ == "__main__":

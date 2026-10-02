@@ -23,6 +23,8 @@
             <div class="title">展厅加载中</div>
             <div class="bar"><div id="loading-fill"></div></div>
             <div id="loading-text">准备中…</div>
+            <div id="scene-picker-note"></div>
+            <div id="scene-picker"></div>
         </div>
     </div>
 
@@ -37,15 +39,18 @@
     <aside id="panel">
         <header>
             <h1>展厅对象</h1>
+            <label class="scene">场景 <select id="scene-select" title="切换场景（会重新加载页面）"></select></label>
             <div id="status">加载中…</div>
         </header>
         <section class="toggles">
             <label class="mode">显示方式
-                <select id="display-mode" title="快捷键 0/1/2/3">
+                <select id="display-mode" title="快捷键 0-5">
                     <option value="none">0 · 原始场景</option>
                     <option value="box" selected>1 · Box 线框</option>
                     <option value="mask">2 · Mask 着色</option>
                     <option value="both">3 · Box + Mask</option>
+                    <option value="mask-inst">4 · Mask 着色（按实例）</option>
+                    <option value="both-inst">5 · Box + Mask（按实例）</option>
                 </select>
             </label>
             <label><input type="checkbox" id="toggle-boxes" checked /> 显示 Box</label>
@@ -83,7 +88,7 @@
         <footer>
             <button id="btn-frame">整体视角</button>
             <button id="btn-walk" title="WASD 行走，鼠标转头，Esc 退出">步行模式（人眼高度）</button>
-            <div class="hint">Tab 面板 · ` 0-3 显示方式 · I 相机信息</div>
+            <div class="hint">Tab 面板 · ` 0-5 显示方式 · I 相机信息</div>
         </footer>
     </aside>
 

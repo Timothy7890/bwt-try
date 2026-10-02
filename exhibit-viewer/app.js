@@ -12,12 +12,26 @@ import { CollisionMesh, VoxelOccluder } from './occlusion.js';
 // ------------------------------------------------------------------ config
 
 const params = new URLSearchParams(location.search);
-const CONTENT_URL = params.get('content') ?? (await pickDefaultContent());
-const OBJECTS_URL = params.get('objects') ?? './data/objects.json';
+// every scene registered by tools/pipeline.py (step "link") lives in data/scenes/<name>/
+const SCENE_INDEX_URL = './data/scenes/index.json';
+const LAST_SCENE_KEY = 'exhibit-viewer:scene';
+// per-file overrides that only make sense for the scene they were written for
+const FILE_PARAMS = ['content', 'objects', 'collision', 'masks', 'walkmesh'];
+
+const sceneList = await fetch(SCENE_INDEX_URL, { cache: 'no-store' })
+    .then((r) => (r.ok ? r.json() : {}))
+    .then((j) => j.scenes ?? [])
+    .catch(() => []);
+const scene = await chooseScene(sceneList);
+const SCENE_DIR = scene ? `./data/scenes/${encodeURIComponent(scene.name)}/` : './data/';
+const sceneHas = (file) => !scene || scene.files.includes(file);
+
+const CONTENT_URL = params.get('content') ?? SCENE_DIR + (scene?.content ?? 'scene.sog');
+const OBJECTS_URL = params.get('objects') ?? `${SCENE_DIR}objects.json`;
 const OCCLUDER = params.get('occluder') ?? 'voxel'; // voxel (from Gaussians) | mesh (device collision.ply)
-const COLLISION_URL = params.get('collision') ?? (OCCLUDER === 'mesh' ? './data/collision.bin' : './data/occupancy.bin');
+const COLLISION_URL = params.get('collision') ?? SCENE_DIR + (OCCLUDER === 'mesh' ? 'collision.bin' : 'occupancy.bin');
 const SETTINGS_URL = params.get('settings') ?? './settings.json';
-const MASKS_URL = params.get('masks') ?? './data/masks/manifest.json';
+const MASKS_URL = params.get('masks') ?? `${SCENE_DIR}masks/manifest.json`;
 
 // the source data is Z-up; this is the same rotation used in the SuperSplat editor
 const SOURCE_ROTATION = [-90, 0, 0];
@@ -26,23 +40,66 @@ const LABEL_RISE_PX = 56; // how far above the anchor the label sits
 const EYE_HEIGHT = parseFloat(params.get('eye') ?? '1.7'); // metres above the floor
 const WALK_FOV = parseFloat(params.get('walkfov') ?? '75');
 // voxel collision from the Gaussians (tools/pipeline.py, step "walk"); a .glb mesh also works
-const WALK_COLLISION = params.get('walkmesh') ?? './data/walk.voxel.json';
+const WALK_COLLISION = params.get('walkmesh') ?? (sceneHas('walk.voxel.json') ? `${SCENE_DIR}walk.voxel.json` : undefined);
 const CHARACTERS = {
     g1: { url: './data/robot/g1_character.glb', walkSpeed: 0.65, ahead: 1.8, height: 1.32 },
     h2: { url: './data/robot/h2_character.glb', walkSpeed: 0.85, ahead: 2.0, height: 1.8 },
     h1_2: { url: './data/robot/h1_2_character.glb', walkSpeed: 0.84, ahead: 2.0, height: 1.8 }
 };
 
-async function pickDefaultContent() {
-    for (const c of ['./data/scene.sog', './data/scene_fast.sog', './data/scene.compressed.ply']) {
-        try {
-            const r = await fetch(c, { method: 'HEAD' });
-            if (r.ok) return c;
-        } catch (_) {
-            /* try next */
-        }
+// ?scene=<name> wins; with no (valid) ?scene the loading screen turns into a scene picker,
+// unless there is only one scene. Returns null only for a bare ?content= without any scenes.
+async function chooseScene(list) {
+    const wanted = params.get('scene');
+    const found = list.find((s) => s.name === wanted);
+    if (found) return rememberScene(found);
+    if (!list.length) {
+        if (params.get('content')) return null;
+        document.querySelector('#loading .title').textContent = '没有可用的场景';
+        document.getElementById('loading-text').textContent = '先运行 python3 tools/pipeline.py <场景目录>';
+        return new Promise(() => {});
     }
-    return './data/scene.ply';
+    if (list.length === 1 && !wanted) return rememberScene(list[0]);
+    return rememberScene(await pickSceneOnScreen(list, wanted ? `找不到场景「${wanted}」，请重新选择` : ''));
+}
+
+function rememberScene(s) {
+    localStorage.setItem(LAST_SCENE_KEY, s.name);
+    if (params.get('scene') !== s.name) {
+        params.set('scene', s.name);
+        history.replaceState(null, '', `?${params}`);
+    }
+    return s;
+}
+
+function pickSceneOnScreen(list, note) {
+    const loading = document.getElementById('loading');
+    const picker = document.getElementById('scene-picker');
+    const last = localStorage.getItem(LAST_SCENE_KEY);
+    loading.classList.add('picking');
+    document.querySelector('#loading .title').textContent = '选择场景';
+    document.getElementById('scene-picker-note').textContent = note;
+    return new Promise((resolve) => {
+        for (const s of list) {
+            const btn = document.createElement('button');
+            btn.className = s.name === last ? 'last' : '';
+            btn.innerHTML = `<span class="name">${escapeHtml(s.name)}</span>` +
+                `<span class="meta">${s.objects} 个对象${s.name === last ? ' · 上次浏览' : ''}</span>`;
+            btn.addEventListener('click', () => {
+                loading.classList.remove('picking');
+                document.querySelector('#loading .title').textContent = '展厅加载中';
+                resolve(s);
+            });
+            picker.appendChild(btn);
+        }
+        (picker.querySelector('button.last') ?? picker.querySelector('button')).focus();
+    });
+}
+
+function switchScene(name) {
+    for (const k of FILE_PARAMS) params.delete(k);
+    params.set('scene', name);
+    location.search = params.toString();
 }
 
 // ------------------------------------------------------------------ dom
@@ -55,6 +112,7 @@ const dom = {
     labels: $('labels'),
     list: $('object-list'),
     status: $('status'),
+    sceneSelect: $('scene-select'),
     displayMode: $('display-mode'),
     toggleBoxes: $('toggle-boxes'),
     toggleLabels: $('toggle-labels'),
@@ -84,6 +142,11 @@ const dom = {
     loadingFill: $('loading-fill'),
     loadingText: $('loading-text')
 };
+
+for (const s of sceneList) dom.sceneSelect.add(new Option(s.name, s.name, false, s.name === scene?.name));
+dom.sceneSelect.disabled = sceneList.length < 2;
+dom.sceneSelect.addEventListener('change', () => switchScene(dom.sceneSelect.value));
+document.title = scene ? `${scene.name} · 展厅 3DGS 语义导航` : document.title;
 
 // ------------------------------------------------------------------ viewer
 
@@ -200,6 +263,7 @@ const objects = objectsJson.objects.map((o) => {
     const skipBox = [...o.bbox_min.map((v) => v - 0.1), ...o.bbox_max.map((v) => v + 0.1)];
     return { ...o, corners, probes, anchorProbe, skipBox, visible: true, maskWanted: false, maskOccluded: false, screen: new Array(8), occ: new Uint8Array(8), anchorOcc: false };
 });
+assignInstanceColors(objects);
 let activeId = null;
 const FLOOR_Z = objectsJson.floor_z ?? null; // source frame
 
@@ -273,12 +337,14 @@ function ensureMask(o) {
     const asset = new Asset(`mask:${o.name}`, 'gsplat', { url, filename: `${o.name}.ply` });
     asset.on('load', () => {
         finishItem(`mask:${o.name}`);
-        // keep the original opacities so the mask strength slider can rescale them live
+        // keep the original opacities / colours so the mask strength slider and the
+        // per-instance colour modes can rewrite them live
         const res = asset.resource;
         if (res && res.gsplatData && typeof res.updateColorData === 'function') {
             o.maskResource = res;
             o.maskOrigOpacity = Float32Array.from(res.gsplatData.getProp('opacity'));
-            applyMaskAlpha(o, parseFloat(dom.maskAlpha.value));
+            o.maskOrigDC = SH_PROPS.map((p) => Float32Array.from(res.gsplatData.getProp(p)));
+            updateMaskData(o);
         }
         const e = new Entity(`mask:${o.name}`, app);
         e.addComponent('gsplat', MASK_UNIFIED ? { unified: true, asset } : { unified: false, asset, layers: [maskLayer.id] });
@@ -296,29 +362,60 @@ function ensureMask(o) {
     app.assets.load(asset);
 }
 
-// rescale a mask's per-Gaussian opacity in place and re-upload the colour texture
-function applyMaskAlpha(o, k) {
+const SH_PROPS = ['f_dc_0', 'f_dc_1', 'f_dc_2'];
+const SH_C0 = 0.28209479177387814;
+let maskColorKey = null; // colour each mask currently carries: null = baked class colour
+
+// rewrite a mask's per-Gaussian opacity (strength slider) and colour (class colour, or the
+// instance colour in modes 4/5) in place, then re-upload the colour texture once
+function updateMaskData(o) {
     if (!o.maskResource) return;
     const data = o.maskResource.gsplatData;
     const op = data.getProp('opacity');
     const orig = o.maskOrigOpacity;
+    const k = parseFloat(dom.maskAlpha.value);
     for (let i = 0; i < op.length; i++) {
         const a = Math.min(1 - 1e-4, Math.max(1e-4, (1 / (1 + Math.exp(-orig[i]))) * k));
         op[i] = Math.log(a / (1 - a));
     }
+    const inst = instanceColored();
+    const rgb = inst ? hexToRgb(o.instColor) : null;
+    SH_PROPS.forEach((p, c) => {
+        const dc = data.getProp(p);
+        if (rgb) dc.fill((rgb[c] - 0.5) / SH_C0);
+        else dc.set(o.maskOrigDC[c]);
+    });
+    o.maskInst = inst;
     o.maskResource.updateColorData(data);
 }
 
 dom.maskAlpha.addEventListener('input', () => {
-    const k = parseFloat(dom.maskAlpha.value);
-    dom.maskAlphaV.textContent = k.toFixed(2);
-    for (const o of objects) applyMaskAlpha(o, k);
+    dom.maskAlphaV.textContent = parseFloat(dom.maskAlpha.value).toFixed(2);
+    for (const o of objects) updateMaskData(o);
     app.renderNextFrame = true;
 });
 
+const instanceColored = () => dom.displayMode.value.endsWith('-inst');
+
+// boxes / labels / leaders / list follow the mask colouring of the current mode
+function applyColorScheme() {
+    const inst = instanceColored();
+    if (inst === maskColorKey) return;
+    maskColorKey = inst;
+    for (const o of objects) {
+        const c = inst ? o.instColor : o.color;
+        o.boxG.setAttribute('stroke', c);
+        o.label.style.setProperty('--c', c);
+        o.leader.poly.setAttribute('stroke', c);
+        o.leader.dot.setAttribute('stroke', c);
+        o.li.style.setProperty('--c', c);
+        if (o.maskResource && o.maskInst !== inst) updateMaskData(o);
+    }
+}
+
 function refreshMasks() {
     const mode = dom.displayMode.value;
-    const useMask = mode === 'mask' || mode === 'both';
+    const useMask = mode !== 'none' && mode !== 'box';
     for (const o of objects) {
         const want = useMask && o.visible && (activeId === null || o.id === activeId);
         o.maskWanted = want;
@@ -438,14 +535,15 @@ dom.toggleCounts.addEventListener('change', () => {
 });
 function setDisplayMode(mode) {
     dom.displayMode.value = mode;
-    dom.toggleBoxes.checked = mode === 'box' || mode === 'both';
+    dom.toggleBoxes.checked = mode === 'box' || mode.startsWith('both');
+    applyColorScheme();
     refreshMasks();
     requestRedraw();
 }
 dom.displayMode.addEventListener('change', () => setDisplayMode(dom.displayMode.value));
 
-// keyboard: Tab toggles the panel, 0-3 pick the display mode
-const KEY_MODES = { 0: 'none', 1: 'box', 2: 'mask', 3: 'both' };
+// keyboard: Tab toggles the panel, 0-5 pick the display mode
+const KEY_MODES = { 0: 'none', 1: 'box', 2: 'mask', 3: 'both', 4: 'mask-inst', 5: 'both-inst' };
 window.addEventListener('keydown', (ev) => {
     const tag = ev.target && ev.target.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
@@ -900,6 +998,49 @@ requestRedraw();
 
 function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+// Instances of one category get evenly spread hues (golden angle), starting from the
+// category colour's hue so instance 0 stays close to the class colour.
+function assignInstanceColors(list) {
+    const byCat = new Map();
+    for (const o of list) {
+        const key = o.category ?? o.name;
+        if (!byCat.has(key)) byCat.set(key, []);
+        byCat.get(key).push(o);
+    }
+    for (const group of byCat.values()) {
+        group.sort((a, b) => (a.instance ?? a.id) - (b.instance ?? b.id));
+        const base = rgbToHue(hexToRgb(group[0].color));
+        group.forEach((o, i) => {
+            const h = (base + i * 137.508) % 360;
+            // alternate lightness a little so neighbouring hues stay distinguishable
+            o.instColor = hslToHex(h, 0.78, i % 3 === 1 ? 0.45 : i % 3 === 2 ? 0.65 : 0.55);
+        });
+    }
+}
+
+function hexToRgb(hex) {
+    const n = parseInt(hex.replace('#', ''), 16);
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+
+function rgbToHue([r, g, b]) {
+    const max = Math.max(r, g, b);
+    const d = max - Math.min(r, g, b);
+    if (d === 0) return 0;
+    const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return (h * 60 + 360) % 360;
+}
+
+function hslToHex(h, s, l) {
+    const a = s * Math.min(l, 1 - l);
+    const f = (n) => {
+        const k = (n + h / 30) % 12;
+        const v = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+        return Math.round(v * 255).toString(16).padStart(2, '0');
+    };
+    return `#${f(0)}${f(8)}${f(4)}`;
 }
 
 function formatCount(n) {
