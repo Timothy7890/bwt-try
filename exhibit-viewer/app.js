@@ -415,7 +415,9 @@ dom.btnFrame.addEventListener('click', () => {
 dom.btnWalk.addEventListener('click', () => {
     if (state.cameraMode === 'walk') {
         state.cameraMode = 'orbit';
-    } else if (state.walkAllowed) {
+    } else if (state.walkAllowed || state.hasCollision) {
+        // walkAllowed also requires the load-time scene bound to be >= 5 m across, and that
+        // bound comes out far too small here (see fixClipPlanes), so collision data is enough
         state.cameraMode = 'walk';
     } else {
         dom.status.textContent = '步行模式不可用：碰撞网格未加载';
